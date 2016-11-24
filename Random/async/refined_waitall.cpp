@@ -3,10 +3,17 @@
 #include <cstdio>
 #include <ecst/thread_pool.hpp>
 #include <ecst/utils.hpp>
+#include <boost/hana/transform.hpp>
+#include <boost/hana/tuple.hpp>
+#include <boost/hana/unpack.hpp>
 #include <experimental/tuple>
 #include <functional>
 #include <thread>
 #include <tuple>
+
+#define IF_CONSTEXPR \
+    if               \
+    constexpr
 
 namespace ll
 {
@@ -38,8 +45,11 @@ namespace ll
         {
         }
 
-        template <typename TF>
-        auto build(TF&& f);
+        template <typename ...TConts>
+        auto build(TConts&&... f);
+
+        template <typename ...TConts>
+        auto compose(TConts&&... conts);
     };
 
     struct base_node
@@ -193,7 +203,9 @@ namespace ll
 
         auto execute() &
         {
-            (this->ctx()._p.post([&] { static_cast<TFs&> (*this)(); }), ...);
+            auto exec = [this](auto& f) { this->ctx()._p.post(f); };
+            (exec(static_cast<TFs&>(*this)), ...);
+            // (this->ctx()._p.post([&] { static_cast<TFs&> (*this)(); }), ...);
         }
 
         template <typename TNode, typename... TNodes>
@@ -239,10 +251,31 @@ namespace ll
             std::move(*this), FWD(conts)...};
     }
 
-    template <typename TF>
-    auto context::build(TF&& f)
+    template <typename ...TConts>
+    auto context::build(TConts&&... conts)
     {
-        return node_then<root, TF>(root{*this}, FWD(f));
+        // need to be able to pass nodes to 
+        IF_CONSTEXPR(sizeof...(conts) == 0) {
+            static_assert("rip");
+        } else IF_CONSTEXPR(sizeof...(conts) == 1) {
+            return node_then<root, TConts...>(root{*this}, FWD(conts)...);
+        } else {
+            return node_wait_all<root, TConts...>(root{*this}, FWD(conts)...);
+        }
+    }
+
+    // compose multiple existing chains of execution (continuables)
+    template <typename ...TConts>
+    auto context::compose(TConts&&... conts)
+    {
+        auto funcs = boost::hana::transform(boost::hana::make_tuple(FWD(conts)...),
+            [](auto&& c){
+                return [&]{ c.execute(); };
+            });
+        // funcs is a parameter pack of transformed lambdas
+        return boost::hana::unpack(std::move(funcs), [this](auto&&... args){
+                return node_wait_all<root, decltype(args)...>(root{*this}, args...);
+            });
     }
 }
 
@@ -252,6 +285,17 @@ void execute_after_move(T x)
     x.start();
     ll::sleep_ms(1200);
 }
+template<typename... TChains>
+auto wait_until_complete(ll::context& ctx, TChains&&...chains)
+{
+    ecst::latch l{1};
+    // auto final_chain = ctx.build([]{}).wait_all(FWD(chains)...).then([&]{ l.count_down(); });
+    auto final_chain = ctx.compose(FWD(chains)...).then([&]{ l.count_down(); });
+    final_chain.start();
+    l.wait();
+}
+
+
 
 int main()
 {
@@ -273,5 +317,5 @@ int main()
                            .then([] { ll::print_sleep_ms(150, "F"); });
 
     std::printf("%lu\n", sizeof(computation));
-    execute_after_move(std::move(computation));
+    wait_until_complete(ctx, std::move(computation));
 }

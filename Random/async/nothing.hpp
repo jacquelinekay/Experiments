@@ -4,9 +4,11 @@
 #include <experimental/tuple>
 #include <thread>
 #include <mutex>
+#ifdef __MINGW32__
 #include <mingw.thread.h>
 #include <mingw.mutex.h>
 #include <mingw.condition_variable.h>
+#endif  // __MINGW32__
 #include <ecst/utils.hpp>
 #include <utility>
 #include <type_traits>

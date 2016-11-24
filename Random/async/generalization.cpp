@@ -3,9 +3,11 @@
 #include <cstdio>
 #include <thread>
 #include <mutex>
+#ifdef __MINGW_32__
 #include <mingw.thread.h>
 #include <mingw.mutex.h>
 #include <mingw.condition_variable.h>
+#endif
 #include <ecst/thread_pool.hpp>
 #include <ecst/utils.hpp>
 #include <experimental/tuple>
@@ -71,6 +73,9 @@ namespace ll
 
         template <typename TF>
         auto build(TF&& f);
+
+        template <typename ...TConts>
+        auto compose(TConts&&... conts);
     };
 
     struct base_node
@@ -225,6 +230,13 @@ namespace ll
         {
         }
 
+        template <typename TParentFwd, typename... TConts>
+        static compose_from_continuables(TParentFwd&& p, TConts&&... conts)
+        {
+            // return 
+            return node_wait_all(p, result);
+        }
+
         auto execute() &
         {
             //(this->ctx()._p.post([&] { static_cast<TFs&> (*this)(); }), ...);
@@ -270,6 +282,12 @@ namespace ll
         return node_then<root_type, TF>(root_type{*this}, FWD(f));
     }
 
+    // compose multiple continuables
+    template<typename... TConts>
+    auto context::compose(TConts&&... conts)
+    {
+    }
+
 
     template <typename TDerived>
     template <typename... TConts>
@@ -309,6 +327,15 @@ namespace ll
                 std::move(as_derived()), FWD(conts)...};
         }
     }
+}
+
+template<typename... TChains>
+auto wait_until_complete(ll::context& ctx, TChains&&...chains)
+{
+    ecst::latch l{1};
+    auto final_chain = ctx.compose(FWD(chains)...).then([&]{ l.count_down(); });
+    final_chain.start();
+    l.wait();
 }
 
 template <typename T>
